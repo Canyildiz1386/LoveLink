@@ -43,10 +43,7 @@ async def start(update: Update, context):
         message = update.callback_query.message
 
     if existing_user and existing_user.get('is_registered'):
-        keyboard = [
-            [InlineKeyboardButton('📋 Profile 📋', callback_data='show_profile')],
-            [InlineKeyboardButton('❓ Help ❓', callback_data='show_help')]
-        ]
+        keyboard = [[InlineKeyboardButton('📋 Profile 📋', callback_data='show_profile')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await message.reply_text(
             '🎉 Welcome back! 🎉\nWhat would you like to do?',
@@ -133,17 +130,19 @@ async def reg_confirm_city(update: Update, context):
         return REG_CITY
 
 async def reg_photo(update: Update, context):
+    user = update.effective_user
     create_user_directory()
 
-    try:
-        user = update.effective_user
-
-        if update.message and update.message.photo:
+    # Ensure the update contains a message with a photo
+    if update.message and update.message.photo:
+        try:
             photo_file = await update.message.photo[-1].get_file()
             photo_path = f'user_photos/{user.id}.jpg'
             await photo_file.download_to_drive(photo_path)
 
             context.user_data['photo'] = photo_path
+
+            # Update the user's photo path in the database
             users_collection.update_one(
                 {'id': user.id},
                 {'$set': {
@@ -154,19 +153,22 @@ async def reg_photo(update: Update, context):
 
             await show_profile(update, context)
             return ConversationHandler.END
-        else:
-            await update.message.reply_text('😟 Please send a valid photo. 😟')
-            return REG_PHOTO
 
-    except Exception as e:
-        logger.error(f"Error processing photo for user {user.id if user else 'Unknown'}: {e}")
-        await update.message.reply_text(f'😟 There was an error saving your photo: {str(e)}. Please try again. 😟')
+        except Exception as e:
+            logger.error(f"Error processing photo for user {user.id}: {e}")
+            await update.message.reply_text('😟 There was an error saving your photo, please try again. 😟')
+            return REG_PHOTO
+    else:
+        logger.error(f"No photo found for user {user.id}")
+        await update.message.reply_text('😟 Please send a valid photo. 😟')
         return REG_PHOTO
 
 async def show_profile(update: Update, context):
     query = update.callback_query
-    user = query.from_user
-    await query.answer()
+    user = query.from_user if query else update.effective_user
+
+    if query:
+        await query.answer()
 
     user_data = users_collection.find_one({'id': user.id})
 
@@ -188,34 +190,17 @@ async def show_profile(update: Update, context):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.message.delete()
+        if query:
+            await query.message.delete()
 
+        # Send profile details with the photo using context.bot.send_photo
         with open(photo_path, 'rb') as photo:
             await context.bot.send_photo(
-                chat_id=query.message.chat_id,
+                chat_id=update.effective_chat.id,
                 photo=photo, 
                 caption=caption, 
                 reply_markup=reply_markup
             )
-
-async def show_help(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-    
-    keyboard = [
-        [InlineKeyboardButton('🏠 Back to Home 🏠', callback_data='back_home')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    help_message = (
-        "❓ **Help Section** ❓\n\n"
-        "This bot helps you manage your profile. Here’s what you can do:\n"
-        "• View and edit your profile.\n"
-        "• Update your name, age, city, or photo.\n"
-        "• Use the buttons to navigate through different options."
-    )
-    
-    await query.edit_message_text(help_message, reply_markup=reply_markup)
 
 async def back_home(update: Update, context):
     query = update.callback_query
@@ -237,9 +222,7 @@ async def process_edit_name(update: Update, context):
     context.user_data['name'] = new_name
 
     users_collection.update_one({'id': user.id}, {'$set': {'name': new_name}})
-    keyboard = [[InlineKeyboardButton('🏠 Back to Home 🏠', callback_data='back_home')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(f'🎉 Your name has been updated to {new_name}! 🎉', reply_markup=reply_markup)
+    await update.message.reply_text(f'🎉 Your name has been updated to {new_name}! 🎉')
     return ConversationHandler.END
 
 async def edit_age(update: Update, context):
@@ -262,9 +245,7 @@ async def process_edit_age(update: Update, context):
     context.user_data['age'] = int(new_age)
 
     users_collection.update_one({'id': user.id}, {'$set': {'age': context.user_data['age']}})
-    keyboard = [[InlineKeyboardButton('🏠 Back to Home 🏠', callback_data='back_home')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(f'🎉 Your age has been updated to {new_age}! 🎉', reply_markup=reply_markup)
+    await update.message.reply_text(f'🎉 Your age has been updated to {new_age}! 🎉')
     return ConversationHandler.END
 
 async def edit_city(update: Update, context):
@@ -305,11 +286,9 @@ async def process_edit_confirm_city(update: Update, context):
 
         user = query.from_user
         users_collection.update_one({'id': user.id}, {'$set': {'city': selected_city}})
-        keyboard = [[InlineKeyboardButton('🏠 Back to Home 🏠', callback_data='back_home')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.message.delete()
-        await query.message.reply_text(f'🎉 Your city has been updated to {selected_city}! 🎉', reply_markup=reply_markup)
+        await query.message.reply_text(f'🎉 Your city has been updated to {selected_city}! 🎉')
         return ConversationHandler.END
     except (IndexError, ValueError):
         await query.message.reply_text('😟 Invalid selection. Please try again 😟')
@@ -340,9 +319,8 @@ async def process_edit_photo(update: Update, context):
                 'photo': photo_path
             }}
         )
-        keyboard = [[InlineKeyboardButton('🏠 Back to Home 🏠', callback_data='back_home')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text('🎉 Your profile photo has been updated! 🎉', reply_markup=reply_markup)
+
+        await update.message.reply_text('🎉 Your profile photo has been updated! 🎉')
         return ConversationHandler.END
 
     except Exception as e:
@@ -389,7 +367,6 @@ def main():
     application.add_handler(edit_name_conv_handler)
     application.add_handler(edit_age_conv_handler)
     application.add_handler(CallbackQueryHandler(show_profile, pattern='^show_profile$'))
-    
     edit_city_conv_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(edit_city, pattern='^edit_city$')],
         states={
@@ -411,7 +388,6 @@ def main():
     application.add_handler(edit_photo_conv_handler)
 
     application.add_handler(CallbackQueryHandler(back_home, pattern='^back_home$'))
-    application.add_handler(CallbackQueryHandler(show_help, pattern='^show_help$'))
 
     application.run_polling()
 
